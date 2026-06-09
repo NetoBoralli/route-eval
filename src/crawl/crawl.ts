@@ -12,6 +12,7 @@ import { buildLocator } from '../healing/resolver.js';
 import { sweepPopups } from '../healing/popups.js';
 import { healWithLLM } from '../healing/llm.js';
 import { healWithLabel } from './labelHeuristics.js';
+import { meetsAcceptance } from './acceptance.js';
 import { gotoProductPage } from '../util/navigation.js';
 import { clearFeedback, readFeedback } from '../heal/feedback.js';
 
@@ -73,18 +74,27 @@ async function resolveForCrawl(
     if (cached) {
       const loc = buildLocator(page, cached.hint);
       if (await isUsable(loc)) {
-        // Reuse the cached selector — mark source as 'cached' but preserve original discovery time.
-        out[landmark] = {
-          hint: cached.hint,
-          source: 'cached',
-          discoveredAt: cached.discoveredAt,
-          ...(cached.confidence ? { confidence: cached.confidence } : {}),
-        };
-        logStep(profile, landmark, `cache hit (${cached.source}, ${cached.discoveredAt})`);
-        writeProgress(profile, out);
-        return loc.first();
+        const accept = await meetsAcceptance(loc, landmark);
+        if (accept.ok) {
+          // Reuse the cached selector — mark source as 'cached' but preserve original discovery time.
+          out[landmark] = {
+            hint: cached.hint,
+            source: 'cached',
+            discoveredAt: cached.discoveredAt,
+            ...(cached.confidence ? { confidence: cached.confidence } : {}),
+          };
+          logStep(profile, landmark, `cache hit (${cached.source}, ${cached.discoveredAt})`);
+          writeProgress(profile, out);
+          return loc.first();
+        }
+        logStep(
+          profile,
+          landmark,
+          `cache stale (acceptance failed: ${accept.reason}) — re-discovering`,
+        );
+      } else {
+        logStep(profile, landmark, `cache stale — re-discovering with LLM`);
       }
-      logStep(profile, landmark, `cache stale — re-discovering with LLM`);
     }
   }
 
@@ -93,19 +103,28 @@ async function resolveForCrawl(
     const hint: SelectorHint = { kind: 'css', css: result.selector };
     const loc = buildLocator(page, hint);
     if (await isUsable(loc)) {
-      out[landmark] = {
-        hint,
-        source: 'llm',
-        discoveredAt: new Date().toISOString(),
-        confidence: result.confidence,
-      };
-      logStep(profile, landmark, `LLM discovered (${result.confidence}): ${result.selector}`);
-      writeProgress(profile, out);
-      return loc.first();
+      const accept = await meetsAcceptance(loc, landmark);
+      if (accept.ok) {
+        out[landmark] = {
+          hint,
+          source: 'llm',
+          discoveredAt: new Date().toISOString(),
+          confidence: result.confidence,
+        };
+        logStep(profile, landmark, `LLM discovered (${result.confidence}): ${result.selector}`);
+        writeProgress(profile, out);
+        return loc.first();
+      }
+      logStep(
+        profile,
+        landmark,
+        `LLM result failed acceptance (${accept.reason}) — escalating to label heuristic`,
+      );
+    } else {
+      logStep(profile, landmark, `LLM result unusable — escalating to label heuristic`);
     }
-    logStep(profile, landmark, `LLM result unusable, escalating to label heuristic`);
   } else {
-    logStep(profile, landmark, `LLM failed, escalating to label heuristic: ${result.reason}`);
+    logStep(profile, landmark, `LLM failed — escalating to label heuristic: ${result.reason}`);
   }
 
   // Escalation: deterministic label-anchored fallback. Searches the page for
@@ -113,21 +132,32 @@ async function resolveForCrawl(
   // matched element's actual DOM attributes.
   const labelResult = await healWithLabel(page, landmark);
   if (labelResult.ok) {
-    const hint: SelectorHint = { kind: 'css', css: labelResult.selector };
-    out[landmark] = {
-      hint,
-      source: 'label',
-      discoveredAt: new Date().toISOString(),
-    };
-    logStep(profile, landmark, `label heuristic discovered: ${labelResult.selector}`);
-    writeProgress(profile, out);
-    return labelResult.loc;
+    const accept = await meetsAcceptance(labelResult.loc, landmark);
+    if (accept.ok) {
+      const hint: SelectorHint = { kind: 'css', css: labelResult.selector };
+      out[landmark] = {
+        hint,
+        source: 'label',
+        discoveredAt: new Date().toISOString(),
+      };
+      logStep(profile, landmark, `label heuristic discovered: ${labelResult.selector}`);
+      writeProgress(profile, out);
+      return labelResult.loc;
+    }
+    logStep(
+      profile,
+      landmark,
+      `label heuristic produced unacceptable selector (${accept.reason})`,
+    );
   }
 
+  const labelSummary = labelResult.ok
+    ? `selector "${labelResult.selector}" found but failed acceptance`
+    : labelResult.reason;
   throw new Error(
     `Could not discover "${landmark}" on ${profile.name}. ` +
-      `LLM result: ${result.ok ? `unusable selector "${result.selector}"` : result.reason}. ` +
-      `Label heuristic: ${labelResult.reason}. ` +
+      `LLM result: ${result.ok ? `selector "${result.selector}" did not meet acceptance` : result.reason}. ` +
+      `Label heuristic: ${labelSummary}. ` +
       `Inspect debug/crawl/${landmark}.*.snippet.html and add an entry to ${profile.name}.overrides.ts.`,
   );
 }
