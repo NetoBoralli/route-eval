@@ -262,12 +262,11 @@ export async function crawlMerchant(
     await sweepPopups(page, profile);
     await assertCartNotEmpty(page);
 
-    // Stage 4: cart page. We skip cartTotal (most merchants don't render a
-    // grand total when tax is calculated at checkout) AND cartSubtotal
-    // (Route's widget on Scheels doesn't change the subtotal directly — the
-    // toggle's only widget-level signal is the checkbox state itself). The
-    // toggle test verifies behavior via routeToggle.isChecked() + routePrice
-    // rendering a $-amount when ON.
+    // Stage 4: cart page. cartTotal is skipped (most merchants compute tax at
+    // checkout and don't render a grand total here). cartSubtotal is what
+    // tells us whether the toggle actually moved cart math — it should drop
+    // by routePrice when Route is off, restore when on, with a 1-2s delay.
+    await resolveForCrawl(page, profile, 'cartSubtotal', previous, force, entries, feedback);
     await resolveForCrawl(page, profile, 'routeToggle', previous, force, entries, feedback);
     await resolveForCrawl(page, profile, 'routePrice', previous, force, entries, feedback);
   } finally {
