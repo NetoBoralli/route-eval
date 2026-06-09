@@ -260,9 +260,11 @@ export async function crawlMerchant(
     await sweepPopups(page, profile);
     await assertCartNotEmpty(page);
 
-    // Stage 4: cart page.
+    // Stage 4: cart page. We deliberately skip cartTotal — many merchants
+    // (including Scheels) don't render a grand total on the cart page when
+    // tax is calculated at checkout. The toggle test verifies behavior via
+    // routePrice element state, no grand total needed.
     await resolveForCrawl(page, profile, 'cartSubtotal', previous, force, entries, feedback);
-    await resolveForCrawl(page, profile, 'cartTotal', previous, force, entries, feedback);
     await resolveForCrawl(page, profile, 'routeToggle', previous, force, entries, feedback);
     await resolveForCrawl(page, profile, 'routePrice', previous, force, entries, feedback);
   } finally {

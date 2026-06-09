@@ -9,6 +9,44 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describeLocator, locatorIsUsable } from './resolver.js';
 
+// Find the first balanced top-level {...} in a string, respecting strings and
+// escapes. Robust to models that emit prose before/after the JSON. The naive
+// indexOf('{')..lastIndexOf('}') extraction failed when Claude trailed the JSON
+// with explanatory text containing another close-brace.
+function extractFirstJsonObject(raw: string): string | null {
+  let start = -1;
+  let depth = 0;
+  let inString: '"' | "'" | null = null;
+  let escape = false;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (inString) {
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (ch === '\\') {
+        escape = true;
+        continue;
+      }
+      if (ch === inString) inString = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      inString = ch;
+      continue;
+    }
+    if (ch === '{') {
+      if (start === -1) start = i;
+      depth++;
+    } else if (ch === '}') {
+      depth--;
+      if (depth === 0 && start !== -1) return raw.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
 type PostJsonResult = { status: number; text: string };
 
 // Plain node:http POST. Bypasses undici/fetch's 30s headers timeout — local
@@ -112,7 +150,7 @@ async function callAnthropic(userPrompt: string): Promise<ProviderCall> {
   try {
     const response = await client.messages.create({
       model,
-      max_tokens: 400,
+      max_tokens: 1024,
       system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: [{ type: 'text', text: userPrompt }] }],
     });
@@ -267,14 +305,13 @@ async function runOneAttempt(
   dumpDebug(landmark, attemptNumber, { 'response.txt': call.text });
 
   const raw = call.text;
-  const jsonStart = raw.indexOf('{');
-  const jsonEnd = raw.lastIndexOf('}');
-  if (jsonStart === -1 || jsonEnd === -1) {
+  const jsonText = extractFirstJsonObject(raw);
+  if (!jsonText) {
     return { ok: false, reason: `[${provider}] response is not JSON: ${raw.slice(0, 200)}` };
   }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw.slice(jsonStart, jsonEnd + 1));
+    parsed = JSON.parse(jsonText);
   } catch (err) {
     return { ok: false, reason: `[${provider}] JSON parse failed: ${(err as Error).message}` };
   }

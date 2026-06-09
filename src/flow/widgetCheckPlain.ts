@@ -24,6 +24,27 @@ async function readText(page: Page, profile: SiteProfile, landmark: Landmark): P
   return (await loc.innerText()).trim();
 }
 
+// Returns the visible text of the routePrice element, or `null` if the element
+// is not in the DOM / not visible. Used to detect the "Route toggled off"
+// state, where the price element typically disappears or zeroes out.
+async function readRoutePriceState(page: Page, profile: SiteProfile): Promise<string | null> {
+  try {
+    const loc = await resolve(page, profile, 'routePrice');
+    if (!(await loc.isVisible({ timeout: 1500 }).catch(() => false))) return null;
+    return (await loc.innerText()).trim();
+  } catch {
+    return null;
+  }
+}
+
+function safeParseCents(text: string): number | null {
+  try {
+    return parseMoneyCents(text);
+  } catch {
+    return null;
+  }
+}
+
 // Plain-function version of the cart/widget validation. Used by both the heal
 // CLI (which needs structured failures to drive its retry loop) and the
 // Playwright Test spec (which wraps each step in test.step).
@@ -86,9 +107,8 @@ export async function runWidgetCheckPlain(
     };
   }
 
-  // Step: read prices with Route on
-  let routePriceCents: number;
-  let totalWithRouteCents: number;
+  // Step: read Route price with toggle on
+  let routePriceCentsOn: number;
   const readValues: Partial<Record<Landmark, string>> = {};
   try {
     const toggle = await resolve(page, profile, 'routeToggle');
@@ -107,7 +127,7 @@ export async function runWidgetCheckPlain(
 
   try {
     readValues.routePrice = await readText(page, profile, 'routePrice');
-    routePriceCents = parseMoneyCents(readValues.routePrice);
+    routePriceCentsOn = parseMoneyCents(readValues.routePrice);
   } catch (err) {
     return {
       ok: false,
@@ -120,91 +140,60 @@ export async function runWidgetCheckPlain(
     };
   }
 
-  try {
-    readValues.cartTotal = await readText(page, profile, 'cartTotal');
-    totalWithRouteCents = parseMoneyCents(readValues.cartTotal);
-  } catch (err) {
-    return {
-      ok: false,
-      failure: {
-        step: 'read cart total',
-        message: (err as Error).message,
-        suspectLandmarks: ['cartTotal'],
-        readValues,
-      },
-    };
-  }
-
-  // Sanity guard: cartTotal must not point at the same DOM element as
-  // routePrice (a common LLM mistake — Claude returns nearly-identical
-  // selectors scoped under the same parent).
-  if (totalWithRouteCents === routePriceCents) {
-    return {
-      ok: false,
-      failure: {
-        step: 'sanity check cart total',
-        message:
-          `cartTotal value ${formatCents(totalWithRouteCents)} is identical to routePrice — ` +
-          `the selectors almost certainly point at the same DOM element.`,
-        suspectLandmarks: ['cartTotal'],
-        readValues,
-      },
-    };
-  }
-
-  // Step: uncheck Route, total should drop by routePrice
-  let totalWithoutRouteCents: number;
+  // Step: uncheck Route. The Route price element should either disappear
+  // (not visible) or stop showing a $-amount.
   try {
     const toggle = await resolve(page, profile, 'routeToggle');
     await toggle.uncheck();
     await page.waitForTimeout(750);
-    readValues.cartTotal = await readText(page, profile, 'cartTotal');
-    totalWithoutRouteCents = parseMoneyCents(readValues.cartTotal);
   } catch (err) {
     return {
       ok: false,
       failure: {
-        step: 'uncheck Route and read total',
+        step: 'uncheck Route',
         message: (err as Error).message,
-        suspectLandmarks: ['routeToggle', 'cartTotal'],
+        suspectLandmarks: ['routeToggle'],
         readValues,
       },
     };
   }
 
-  const delta = totalWithRouteCents - totalWithoutRouteCents;
-  if (!withinTolerance(delta, routePriceCents, TOLERANCE_CENTS)) {
+  const priceOffText = await readRoutePriceState(page, profile);
+  readValues.routePrice = priceOffText ?? '<hidden>';
+  const offCents = priceOffText !== null ? safeParseCents(priceOffText) : null;
+  if (offCents !== null && offCents === routePriceCentsOn) {
     return {
       ok: false,
       failure: {
-        step: 'assert total drops by Route amount',
+        step: 'assert Route price hides/changes when toggled off',
         message:
-          `Total dropped by ${formatCents(delta)} after unchecking Route, ` +
-          `expected drop of ${formatCents(routePriceCents)} (the Route line price).`,
-        // If the total didn't move by the Route amount, the cartTotal selector is the most likely culprit.
-        suspectLandmarks: ['cartTotal', 'routePrice'],
+          `Route price element still shows the same value (${formatCents(offCents)}) ` +
+          `after unchecking the toggle. Either the toggle isn't actually changing the widget state, ` +
+          `or the routeToggle selector points at the wrong element.`,
+        suspectLandmarks: ['routeToggle', 'routePrice'],
         readValues,
       },
     };
   }
 
-  // Step: re-check Route, total should restore
+  // Step: re-check Route, price should come back to the original value.
   try {
     const toggle = await resolve(page, profile, 'routeToggle');
     await toggle.check();
     await page.waitForTimeout(750);
-    const restoredText = await readText(page, profile, 'cartTotal');
-    const restoredCents = parseMoneyCents(restoredText);
-    if (!withinTolerance(restoredCents, totalWithRouteCents, TOLERANCE_CENTS)) {
+    const restored = await readText(page, profile, 'routePrice');
+    readValues.routePrice = restored;
+    const restoredCents = parseMoneyCents(restored);
+    if (!withinTolerance(restoredCents, routePriceCentsOn, TOLERANCE_CENTS)) {
       return {
         ok: false,
         failure: {
-          step: 'assert total restored after re-check',
+          step: 'assert Route price restored after re-check',
           message:
-            `Re-checking Route should restore total to ${formatCents(totalWithRouteCents)}, ` +
+            `Re-checking Route should restore the price to ${formatCents(routePriceCentsOn)}, ` +
             `got ${formatCents(restoredCents)}.`,
-          suspectLandmarks: ['cartTotal', 'routeToggle'],
-          readValues: { ...readValues, cartTotal: restoredText },
+          suspectLandmarks: ['routePrice', 'routeToggle'],
+          readValues,
         },
       };
     }
@@ -214,7 +203,7 @@ export async function runWidgetCheckPlain(
       failure: {
         step: 'restore Route',
         message: (err as Error).message,
-        suspectLandmarks: ['routeToggle', 'cartTotal'],
+        suspectLandmarks: ['routeToggle', 'routePrice'],
         readValues,
       },
     };
