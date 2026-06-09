@@ -11,25 +11,24 @@ type SynthesizeResult =
 // human-readable reason that surfaces in the crawl log.
 async function synthesizeStableSelector(loc: Locator): Promise<SynthesizeResult> {
   try {
+    // The evaluated body deliberately avoids named function/const declarations.
+    // tsx/esbuild wraps named declarations with __name() for stack-trace
+    // fidelity, and that helper doesn't exist in the page's browser context
+    // (ReferenceError: __name is not defined). Everything inline.
     const raw = await loc.first().evaluate((node: Element) => {
       const out: { selector?: string; via?: string; reason?: string } = {};
       if (!(node instanceof Element)) {
         out.reason = `matched node is not an Element (got ${typeof node})`;
         return out;
       }
-      const cssEscape = (s: string): string =>
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (window as unknown as { CSS?: { escape?: (s: string) => string } }).CSS?.escape
-          ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            (window as any).CSS.escape(s)
-          : s.replace(/[^a-zA-Z0-9_-]/g, (c: string) => `\\${c}`);
-
       if (node.id) {
-        out.selector = `#${cssEscape(node.id)}`;
+        out.selector = `#${node.id.replace(/[^a-zA-Z0-9_-]/g, (c) => `\\${c}`)}`;
         out.via = 'id';
         return out;
       }
-      for (const attr of ['data-testid', 'data-qa', 'data-cy', 'data-test', 'aria-label', 'name']) {
+      const ATTRS = ['data-testid', 'data-qa', 'data-cy', 'data-test', 'aria-label', 'name'];
+      for (let i = 0; i < ATTRS.length; i++) {
+        const attr = ATTRS[i]!;
         const v = node.getAttribute(attr);
         if (v) {
           out.selector = `[${attr}="${v.replace(/"/g, '\\"')}"]`;
@@ -37,13 +36,13 @@ async function synthesizeStableSelector(loc: Locator): Promise<SynthesizeResult>
           return out;
         }
       }
-
-      // Try unique class names — if any individual class on this element is
-      // unique on the page, that's a clean selector.
+      // Try unique class names — any individual class globally unique on the
+      // page wins.
       const classes = Array.from(node.classList);
-      for (const cls of classes) {
-        if (!cls || /^[0-9]/.test(cls)) continue; // skip hash-y / numeric
-        const escaped = cssEscape(cls);
+      for (let i = 0; i < classes.length; i++) {
+        const cls = classes[i]!;
+        if (!cls || /^[0-9]/.test(cls)) continue;
+        const escaped = cls.replace(/[^a-zA-Z0-9_-]/g, (c) => `\\${c}`);
         const matches = document.querySelectorAll(`.${escaped}`);
         if (matches.length === 1 && matches[0] === node) {
           out.selector = `.${escaped}`;
@@ -51,20 +50,24 @@ async function synthesizeStableSelector(loc: Locator): Promise<SynthesizeResult>
           return out;
         }
       }
-
-      // Last resort: structural tag+position path. Walk up until BODY or 8
-      // hops. Always produces something for any element with a parent chain.
+      // Structural tag+position path, up to 8 hops or until BODY.
       const path: string[] = [];
       let cur: Element | null = node;
       while (cur && cur.tagName !== 'BODY' && path.length < 8) {
         let part = cur.tagName.toLowerCase();
         const parent: Element | null = cur.parentElement;
         if (parent) {
-          const sameTag = Array.from(parent.children).filter((c) => c.tagName === cur!.tagName);
-          if (sameTag.length > 1) {
-            const idx = sameTag.indexOf(cur) + 1;
-            part += `:nth-of-type(${idx})`;
+          let idx = 1;
+          let sib: Element | null = cur.previousElementSibling;
+          while (sib) {
+            if (sib.tagName === cur.tagName) idx++;
+            sib = sib.previousElementSibling;
           }
+          let total = 0;
+          for (let ci = 0; ci < parent.children.length; ci++) {
+            if (parent.children[ci]!.tagName === cur.tagName) total++;
+          }
+          if (total > 1) part += `:nth-of-type(${idx})`;
         }
         path.unshift(part);
         cur = parent;

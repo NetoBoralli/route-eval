@@ -14,6 +14,7 @@ import { healWithLLM } from '../healing/llm.js';
 import { healWithLabel } from './labelHeuristics.js';
 import { meetsAcceptance } from './acceptance.js';
 import { gotoProductPage } from '../util/navigation.js';
+import { installPopupBlocker } from '../util/popupBlocker.js';
 import { clearFeedback, readFeedback } from '../heal/feedback.js';
 
 export type CrawlOptions = {
@@ -220,6 +221,7 @@ export async function crawlMerchant(
     locale: 'en-US',
     viewport: { width: 1440, height: 900 },
   });
+  await installPopupBlocker(context);
   const page = await context.newPage();
   // Start from previous entries so a mid-flight crash doesn't drop perfectly
   // good cached values for landmarks we hadn't gotten to yet. Each successful

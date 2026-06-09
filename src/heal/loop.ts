@@ -10,6 +10,7 @@ import {
 import { crawlMerchant } from '../crawl/crawl.js';
 import { runWidgetCheckPlain } from '../flow/widgetCheckPlain.js';
 import { stealthChromium } from '../util/stealthChromium.js';
+import { installPopupBlocker } from '../util/popupBlocker.js';
 import { writeFeedbackFromFailure } from './feedback.js';
 
 export type HealLoopOptions = {
@@ -70,6 +71,7 @@ async function runTestOnce(merchantName: string, headed: boolean): Promise<
     locale: 'en-US',
     viewport: { width: 1440, height: 900 },
   });
+  await installPopupBlocker(context);
   const page = await context.newPage();
   try {
     return await runWidgetCheckPlain(page, profile);

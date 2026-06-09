@@ -35,8 +35,8 @@ export const scheels: SiteProfile = {
       { kind: 'css', css: '[data-testid*="route" i] input[type="checkbox"]' },
     ],
     routePrice: [
-      { kind: 'css', css: '[data-testid*="route" i] :is(.price, [class*="price" i])' },
-      { kind: 'text', text: /route/i, tag: 'div' },
+      { kind: 'css', css: '[data-testid="pw-quote"]' },
+      { kind: 'css', css: '.pw-quote' },
     ],
   },
   popupHints: [
