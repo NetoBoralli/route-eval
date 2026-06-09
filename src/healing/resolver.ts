@@ -1,7 +1,10 @@
 import type { Locator, Page } from '@playwright/test';
 import type { Landmark, SelectorHint, SiteProfile } from '../merchants/types.js';
 import * as cache from './cache.js';
+import { findByLabelLandmark } from './labelHeuristics.js';
 
+// Synchronous Locator builder for static hints. labelMatch is async-only and
+// must go through resolveHint() instead.
 export function buildLocator(page: Page, hint: SelectorHint): Locator {
   switch (hint.kind) {
     case 'role':
@@ -16,7 +19,20 @@ export function buildLocator(page: Page, hint: SelectorHint): Locator {
         : page.getByText(hint.text);
     case 'css':
       return page.locator(hint.css);
+    case 'labelMatch':
+      throw new Error(
+        'labelMatch hint must be resolved via resolveHint(), not buildLocator()',
+      );
   }
+}
+
+// Async wrapper that handles every hint kind, including labelMatch which
+// re-runs the per-landmark heuristic at resolve time.
+export async function resolveHint(page: Page, hint: SelectorHint): Promise<Locator | null> {
+  if (hint.kind === 'labelMatch') {
+    return findByLabelLandmark(page, hint.landmark);
+  }
+  return buildLocator(page, hint);
 }
 
 export function describeHint(hint: SelectorHint): string {
@@ -29,6 +45,8 @@ export function describeHint(hint: SelectorHint): string {
       return `text=${hint.text}${hint.tag ? ` (in <${hint.tag}>)` : ''}`;
     case 'css':
       return `css=${hint.css}`;
+    case 'labelMatch':
+      return `labelMatch(${hint.landmark})`;
   }
 }
 
@@ -60,19 +78,26 @@ export async function describeLocator(loc: Locator): Promise<{ count: number; vi
   }
 }
 
+async function resolveHintToLocator(page: Page, hint: SelectorHint): Promise<Locator | null> {
+  return resolveHint(page, hint);
+}
+
 export async function resolve(
   page: Page,
   profile: SiteProfile,
   landmark: Landmark,
 ): Promise<Locator> {
   const cached = cache.get(profile.name, landmark);
-  if (cached) return buildLocator(page, cached.hint).first();
+  if (cached) {
+    const loc = await resolveHintToLocator(page, cached.hint);
+    if (loc) return loc.first();
+  }
 
   // Tier 1: manual override. Human knows best — final say.
   const override = profile.overrides?.[landmark];
   if (override) {
-    const loc = buildLocator(page, override);
-    if (await locatorIsUsable(loc)) {
+    const loc = await resolveHintToLocator(page, override);
+    if (loc && (await locatorIsUsable(loc))) {
       // eslint-disable-next-line no-console
       console.log(`[resolve] ${profile.name}.${landmark} via override`);
       cache.set(profile.name, { landmark, source: 'override', hint: override });
@@ -87,10 +112,10 @@ export async function resolve(
   // Tier 2: crawled selector (produced by `npm run crawl`).
   const crawled = profile.crawled?.[landmark];
   if (crawled) {
-    const loc = buildLocator(page, crawled);
-    if (await locatorIsUsable(loc)) {
+    const loc = await resolveHintToLocator(page, crawled);
+    if (loc && (await locatorIsUsable(loc))) {
       // eslint-disable-next-line no-console
-      console.log(`[resolve] ${profile.name}.${landmark} via crawled`);
+      console.log(`[resolve] ${profile.name}.${landmark} via crawled (${describeHint(crawled)})`);
       cache.set(profile.name, { landmark, source: 'crawled', hint: crawled });
       return loc.first();
     }
@@ -102,8 +127,8 @@ export async function resolve(
 
   // Tier 3: heuristic hints from the profile.
   for (const hint of profile.hints[landmark]) {
-    const loc = buildLocator(page, hint);
-    if (await locatorIsUsable(loc)) {
+    const loc = await resolveHintToLocator(page, hint);
+    if (loc && (await locatorIsUsable(loc))) {
       cache.set(profile.name, { landmark, source: 'heuristic', hint });
       return loc.first();
     }

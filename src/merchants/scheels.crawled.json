@@ -1,6 +1,6 @@
 {
   "merchant": "scheels",
-  "crawledAt": "2026-06-09T03:55:46.410Z",
+  "crawledAt": "2026-06-09T04:10:19.513Z",
   "entries": {
     "addToCart": {
       "hint": {
@@ -8,7 +8,7 @@
         "css": "#add-to-cart"
       },
       "source": "cached",
-      "discoveredAt": "2026-06-09T03:53:01.839Z",
+      "discoveredAt": "2026-06-09T04:07:28.146Z",
       "confidence": "high"
     },
     "cartLink": {
@@ -17,16 +17,16 @@
         "css": "#headercart"
       },
       "source": "cached",
-      "discoveredAt": "2026-06-09T03:53:06.723Z",
+      "discoveredAt": "2026-06-09T04:07:29.986Z",
       "confidence": "high"
     },
     "routeToggle": {
       "hint": {
         "kind": "css",
-        "css": "input[data-testid=\"toggle\"]"
+        "css": "input[data-testid='toggle']"
       },
       "source": "cached",
-      "discoveredAt": "2026-06-09T03:53:29.006Z",
+      "discoveredAt": "2026-06-09T04:07:57.831Z",
       "confidence": "high"
     },
     "routePrice": {
@@ -35,17 +35,16 @@
         "css": ".pw-quote"
       },
       "source": "cached",
-      "discoveredAt": "2026-06-09T03:53:58.190Z",
+      "discoveredAt": "2026-06-09T04:08:25.162Z",
       "confidence": "high"
     },
     "cartSubtotal": {
       "hint": {
         "kind": "css",
-        "css": ".flex.items-center.justify-between.capitalize.text-secondary-black.text-sm > div.flex.items-center > p"
+        "css": "div:nth-of-type(2) > div > div:nth-of-type(2) > div > div:nth-of-type(1) > div > div:nth-of-type(2) > div:nth-of-type(2)"
       },
-      "source": "llm",
-      "discoveredAt": "2026-06-09T03:55:46.329Z",
-      "confidence": "medium"
+      "source": "label",
+      "discoveredAt": "2026-06-09T04:10:19.417Z"
     }
   }
 }

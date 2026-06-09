@@ -11,7 +11,7 @@ import {
 import { buildLocator } from '../healing/resolver.js';
 import { sweepPopups } from '../healing/popups.js';
 import { healWithLLM } from '../healing/llm.js';
-import { healWithLabel } from './labelHeuristics.js';
+import { healWithLabel } from '../healing/labelHeuristics.js';
 import { meetsAcceptance } from './acceptance.js';
 import { gotoProductPage } from '../util/navigation.js';
 import { installPopupBlocker } from '../util/popupBlocker.js';
@@ -135,13 +135,19 @@ async function resolveForCrawl(
   if (labelResult.ok) {
     const accept = await meetsAcceptance(labelResult.loc, landmark);
     if (accept.ok) {
-      const hint: SelectorHint = { kind: 'css', css: labelResult.selector };
+      const labelHint = labelResult.hint;
+      const summary =
+        labelHint.kind === 'css'
+          ? labelHint.css
+          : labelHint.kind === 'labelMatch'
+            ? `runtime labelMatch (${labelHint.landmark})`
+            : `${labelHint.kind}`;
       out[landmark] = {
-        hint,
+        hint: labelResult.hint,
         source: 'label',
         discoveredAt: new Date().toISOString(),
       };
-      logStep(profile, landmark, `label heuristic discovered: ${labelResult.selector}`);
+      logStep(profile, landmark, `label heuristic discovered: ${summary}`);
       writeProgress(profile, out);
       return labelResult.loc;
     }
@@ -153,7 +159,7 @@ async function resolveForCrawl(
   }
 
   const labelSummary = labelResult.ok
-    ? `selector "${labelResult.selector}" found but failed acceptance`
+    ? `selector found but failed acceptance`
     : labelResult.reason;
   throw new Error(
     `Could not discover "${landmark}" on ${profile.name}. ` +

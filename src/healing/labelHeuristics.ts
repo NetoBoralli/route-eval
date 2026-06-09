@@ -1,5 +1,5 @@
 import type { Locator, Page } from '@playwright/test';
-import type { Landmark } from '../merchants/types.js';
+import type { Landmark, SelectorHint } from '../merchants/types.js';
 
 type SynthesizeResult =
   | { ok: true; selector: string; via: 'id' | 'attribute' | 'class' | 'path' }
@@ -183,14 +183,32 @@ const finders: Partial<Record<Landmark, (page: Page) => Promise<Locator | null>>
   },
 };
 
+// Runtime entry: just re-run the finder for `landmark` and return its Locator.
+// Used by the resolver when it encounters a `kind: 'labelMatch'` hint — no
+// synthesis, no caching, the heuristic IS the selector.
+export async function findByLabelLandmark(
+  page: Page,
+  landmark: Landmark,
+): Promise<Locator | null> {
+  const finder = finders[landmark];
+  if (!finder) return null;
+  return finder(page);
+}
+
 export type LabelHealResult =
-  | { ok: true; loc: Locator; selector: string }
+  | { ok: true; loc: Locator; hint: SelectorHint }
   | { ok: false; reason: string };
 
-// Attempt to locate a landmark via deterministic label-anchored heuristics, then
-// synthesize a stable CSS selector by reading the matched element's actual id,
-// data-testid, or aria-label. Returns ok+selector only if the synthesized
-// selector resolves back to a usable element (defensive round-trip).
+// Attempt to locate a landmark via deterministic label-anchored heuristics.
+// Returns a SelectorHint we can persist to crawled.json so the test resolver
+// finds the same element at runtime. Two strategies:
+//
+// 1. Synthesize a STABLE CSS selector from the element's real attributes
+//    (id, data-testid, unique class). Verified by round-trip.
+// 2. If synthesis falls back to a brittle structural path (>3 hops of
+//    nth-of-type), cache `{kind: 'labelMatch', landmark}` instead. The
+//    resolver re-runs the heuristic at runtime — immune to DOM reshuffling
+//    between crawl and test.
 export async function healWithLabel(page: Page, landmark: Landmark): Promise<LabelHealResult> {
   const finder = finders[landmark];
   if (!finder) return { ok: false, reason: `no label heuristic for landmark "${landmark}"` };
@@ -201,16 +219,21 @@ export async function healWithLabel(page: Page, landmark: Landmark): Promise<Lab
 
   const synth = await synthesizeStableSelector(found);
   if (!synth.ok) {
-    return { ok: false, reason: `synthesizer failed: ${synth.reason}` };
+    // Synthesis failed entirely — fall back to runtime labelMatch.
+    return { ok: true, loc: found, hint: { kind: 'labelMatch', landmark } };
+  }
+
+  // Structural-path selectors break easily when the DOM reshuffles between
+  // crawl and test. Prefer runtime re-discovery over a brittle path.
+  if (synth.via === 'path') {
+    return { ok: true, loc: found, hint: { kind: 'labelMatch', landmark } };
   }
 
   const verify = page.locator(synth.selector);
   if (!(await isUsable(verify))) {
-    return {
-      ok: false,
-      reason: `synthesized selector "${synth.selector}" (via ${synth.via}) did not round-trip`,
-    };
+    // Synthesized selector didn't round-trip — runtime labelMatch is more reliable.
+    return { ok: true, loc: found, hint: { kind: 'labelMatch', landmark } };
   }
 
-  return { ok: true, loc: verify.first(), selector: synth.selector };
+  return { ok: true, loc: verify.first(), hint: { kind: 'css', css: synth.selector } };
 }

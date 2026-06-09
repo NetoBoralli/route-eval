@@ -15,7 +15,12 @@ export type SelectorHint =
   | { kind: 'role'; role: 'button' | 'link' | 'checkbox' | 'switch'; name?: string | RegExp }
   | { kind: 'testId'; testId: string }
   | { kind: 'text'; text: string | RegExp; tag?: string }
-  | { kind: 'css'; css: string };
+  | { kind: 'css'; css: string }
+  // Re-runs the per-landmark label heuristic at resolve time. Used when no
+  // stable CSS selector exists (the target has no id/data-testid/unique
+  // class) so a synthesized structural path would be brittle. Trades ~10ms
+  // per resolve for robustness against DOM reshuffling.
+  | { kind: 'labelMatch'; landmark: Landmark };
 
 export type ProductEntry =
   | { type: 'directUrl'; url: string }

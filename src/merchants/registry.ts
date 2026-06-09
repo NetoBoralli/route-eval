@@ -15,6 +15,7 @@ const SelectorHintSchema: z.ZodType<SelectorHint> = z.discriminatedUnion('kind',
   z.object({ kind: z.literal('testId'), testId: z.string() }),
   z.object({ kind: z.literal('text'), text: z.string(), tag: z.string().optional() }),
   z.object({ kind: z.literal('css'), css: z.string() }),
+  z.object({ kind: z.literal('labelMatch'), landmark: z.enum(LANDMARKS) }),
 ]);
 
 export type CrawledSource = 'llm' | 'cached' | 'label';

@@ -28,6 +28,8 @@ function describeHint(hint: SelectorHint): string {
       return `role=${hint.role}${hint.name ? ` name=${hint.name}` : ''}`;
     case 'text':
       return `text=${hint.text}${hint.tag ? ` (in <${hint.tag}>)` : ''}`;
+    case 'labelMatch':
+      return `labelMatch(${hint.landmark})`;
   }
 }
 
