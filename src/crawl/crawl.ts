@@ -268,11 +268,11 @@ export async function crawlMerchant(
     await sweepPopups(page, profile);
     await assertCartNotEmpty(page);
 
-    // Stage 4: cart page. cartTotal is skipped (most merchants compute tax at
-    // checkout and don't render a grand total here). cartSubtotal is what
-    // tells us whether the toggle actually moved cart math — it should drop
-    // by routePrice when Route is off, restore when on, with a 1-2s delay.
-    await resolveForCrawl(page, profile, 'cartSubtotal', previous, force, entries, feedback);
+    // Stage 4: cart page. cartTotal and cartSubtotal are both currently
+    // skipped — the flow validates Route's toggle via input.isChecked()
+    // and a $-amount in the routePrice element. Re-enable cartSubtotal when
+    // we wire the subtotal-delta assertion back in (the labelMatch heuristic
+    // needs a runtime-resolve fix first).
     await resolveForCrawl(page, profile, 'routeToggle', previous, force, entries, feedback);
     await resolveForCrawl(page, profile, 'routePrice', previous, force, entries, feedback);
   } finally {
