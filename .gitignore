@@ -1,0 +1,11 @@
+node_modules/
+.env
+.env.local
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+debug/
+src/merchants/*.feedback.json
+.DS_Store
+*.log

@@ -1,0 +1,32 @@
+{
+  "name": "route-eval",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Self-healing e2e validation of the Route widget on top merchant sites.",
+  "scripts": {
+    "crawl": "tsx src/crawl/cli.ts",
+    "crawl:scheels": "tsx src/crawl/cli.ts scheels",
+    "heal": "tsx src/heal/cli.ts",
+    "heal:scheels": "tsx src/heal/cli.ts scheels",
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:scheels": "playwright test scheels",
+    "report": "playwright show-report",
+    "install:browsers": "playwright install chromium",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.0",
+    "dotenv": "^16.4.0",
+    "playwright-extra": "^4.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "zod": "^3.23.0"
+  }
+}
