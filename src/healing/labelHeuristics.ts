@@ -120,31 +120,87 @@ const finders: Partial<Record<Landmark, (page: Page) => Promise<Locator | null>>
     // selector from the element's REAL attributes (id, data-testid, unique
     // class, or structural path) — the marker itself isn't included in the
     // attribute scan list so it's never what gets cached.
-    const handle = await page.evaluateHandle(() => {
+    //
+    // When LABEL_HEURISTIC_DEBUG=1, the evaluate also returns counts and a
+    // sample of candidates so we can see exactly why the scan failed (too
+    // long, no $-amount nearby, etc.).
+    const debug = process.env.LABEL_HEURISTIC_DEBUG === '1';
+    const result = await page.evaluate(() => {
       let best: Element | null = null;
       let bestSize = Infinity;
+      let subtotalMatches = 0;
+      let dollarMatches = 0;
+      let bothMatches = 0;
+      let bothOverCap = 0;
+      // Capture up to 5 of each: candidates that PASSED the size cap, and
+      // candidates that FAILED only the size cap. Lets us see in the log
+      // whether the cap is too strict (failed_cap entries with small over-cap
+      // sizes are signal that 200 is too low).
+      const passed: { text: string; len: number; tag: string }[] = [];
+      const failedCap: { text: string; len: number; tag: string }[] = [];
       const all = document.querySelectorAll('body *');
       for (let i = 0; i < all.length; i++) {
         const el = all[i];
         if (!el) continue;
         const txt = (el.textContent || '').trim();
-        if (txt.length > 200 || txt.length < 5) continue;
-        if (!/subtotal/i.test(txt)) continue;
-        if (!/\$\s*\d/.test(txt)) continue;
+        if (txt.length < 5) continue;
+        const hasSubtotal = /subtotal/i.test(txt);
+        const hasDollar = /\$\s*\d/.test(txt);
+        if (hasSubtotal) subtotalMatches++;
+        if (hasDollar) dollarMatches++;
+        if (!hasSubtotal || !hasDollar) continue;
+        bothMatches++;
+        const entry = {
+          text: txt.slice(0, 120) + (txt.length > 120 ? '…' : ''),
+          len: txt.length,
+          tag: el.tagName.toLowerCase(),
+        };
+        if (txt.length > 200) {
+          bothOverCap++;
+          if (failedCap.length < 5) failedCap.push(entry);
+          continue;
+        }
+        if (passed.length < 5) passed.push(entry);
         if (txt.length < bestSize) {
           bestSize = txt.length;
           best = el;
         }
       }
       if (best) (best as HTMLElement).setAttribute('data-route-eval-label-match', 'subtotal');
-      return best;
+      return {
+        found: !!best,
+        scanned: all.length,
+        subtotalMatches,
+        dollarMatches,
+        bothMatches,
+        bothOverCap,
+        bestSize: best ? bestSize : null,
+        passed,
+        failedCap,
+      };
     });
-    const el = handle.asElement();
-    if (!el) {
-      await handle.dispose();
-      return null;
+
+    // Always log a summary on failure so we can diagnose without env-var
+    // gymnastics; on success only log when LABEL_HEURISTIC_DEBUG=1.
+    if (!result.found || debug) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[labelHeuristic cartSubtotal] scanned=${result.scanned} ` +
+          `subtotalMatches=${result.subtotalMatches} dollarMatches=${result.dollarMatches} ` +
+          `bothMatches=${result.bothMatches} bothOverCap=${result.bothOverCap} ` +
+          `found=${result.found}${result.bestSize !== null ? ` bestSize=${result.bestSize}` : ''}`,
+      );
+      for (const c of result.passed) {
+        // eslint-disable-next-line no-console
+        console.log(`  ✓ passed   <${c.tag}> len=${c.len}: ${JSON.stringify(c.text)}`);
+      }
+      for (const c of result.failedCap) {
+        // eslint-disable-next-line no-console
+        console.log(`  ✗ over-cap <${c.tag}> len=${c.len}: ${JSON.stringify(c.text)}`);
+      }
     }
-    await handle.dispose();
+
+    if (!result.found) return null;
     const loc = page.locator('[data-route-eval-label-match="subtotal"]');
     if (!(await loc.first().isVisible({ timeout: 500 }).catch(() => false))) return null;
     return loc.first();

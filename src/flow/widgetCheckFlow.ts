@@ -3,7 +3,26 @@ import type { SiteProfile } from '../merchants/types.js';
 import { resolve } from '../healing/resolver.js';
 import { sweepPopups } from '../healing/popups.js';
 import { gotoProductPage } from '../util/navigation.js';
-import { parseMoneyCents } from '../util/money.js';
+import { formatCents, parseMoneyCents, withinTolerance } from '../util/money.js';
+
+const SUBTOTAL_POLL_TIMEOUT_MS = 5000;
+const SUBTOTAL_TOLERANCE_CENTS = 5;
+
+async function pollSubtotalChange(
+  page: Page,
+  profile: SiteProfile,
+  baseline: string,
+): Promise<string> {
+  const deadline = Date.now() + SUBTOTAL_POLL_TIMEOUT_MS;
+  let last = baseline;
+  while (Date.now() < deadline) {
+    const loc = await resolve(page, profile, 'cartSubtotal');
+    last = (await loc.innerText().catch(() => last)).trim() || last;
+    if (last !== baseline) return last;
+    await page.waitForTimeout(250);
+  }
+  return last;
+}
 
 async function attachScreenshot(page: Page, info: TestInfo, label: string): Promise<void> {
   const body = await page.screenshot({ fullPage: false });
@@ -103,35 +122,60 @@ export async function runWidgetCheck(
   });
 
   // Route's widget on Scheels (and others) doesn't hide its price line on
-  // toggle off — the visible widget-level change is the checkbox itself.
-  // We assert: the toggle's checked state moves correctly in both directions,
-  // and the widget rendered a $-amount when on.
-  //
-  // TODO: layer the cart-subtotal delta back on once the cartSubtotal
-  // landmark resolves reliably at test time (the labelMatch heuristic
-  // works at crawl time but not at runtime — separate investigation).
+  // toggle off — the visible widget-level change is the checkbox itself,
+  // and the cart subtotal updates after a 1-2s delay. Assert both: checkbox
+  // state in each direction, AND cart subtotal moves by the Route price.
   const toggle = await resolve(page, profile, 'routeToggle');
+  let routePriceCents = 0;
+  let subtotalWithRouteText = '';
+  let subtotalWithRouteCents = 0;
 
-  await test.step('toggle Route ON, verify checkbox + widget rendered', async () => {
+  await test.step('toggle Route ON, read price + subtotal baselines', async () => {
     await setToggle(page, profile, toggle, true);
     expect(await toggle.isChecked(), 'Route toggle is not checked after enabling').toBe(true);
-    const routePriceText = await (await resolve(page, profile, 'routePrice')).innerText();
-    expect(
-      () => parseMoneyCents(routePriceText),
-      `Route price element should contain a $-amount, got ${JSON.stringify(routePriceText.slice(0, 60))}`,
-    ).not.toThrow();
+    routePriceCents = parseMoneyCents(
+      await (await resolve(page, profile, 'routePrice')).innerText(),
+    );
+    subtotalWithRouteText = (
+      await (await resolve(page, profile, 'cartSubtotal')).innerText()
+    ).trim();
+    subtotalWithRouteCents = parseMoneyCents(subtotalWithRouteText);
+    // eslint-disable-next-line no-console
+    console.log(
+      `[values] routePrice=${formatCents(routePriceCents)} subtotal=${formatCents(subtotalWithRouteCents)}`,
+    );
     await attachScreenshot(page, info, '04-widget-on');
   });
 
-  await test.step('toggle Route OFF, verify checkbox state changes', async () => {
+  await test.step('toggle Route OFF, subtotal drops by Route price', async () => {
     await setToggle(page, profile, toggle, false);
     expect(await toggle.isChecked(), 'Route toggle is still checked after disabling').toBe(false);
+    const offText = await pollSubtotalChange(page, profile, subtotalWithRouteText);
+    const offCents = parseMoneyCents(offText);
+    const delta = subtotalWithRouteCents - offCents;
     await attachScreenshot(page, info, '05-widget-off');
+    expect(
+      delta !== 0,
+      `Cart subtotal did not change after unchecking Route (${formatCents(subtotalWithRouteCents)} both before and after) — cartSubtotal may point at a static element.`,
+    ).toBe(true);
+    expect(
+      withinTolerance(delta, routePriceCents, SUBTOTAL_TOLERANCE_CENTS),
+      `Cart subtotal dropped by ${formatCents(delta)} after unchecking Route, expected drop ${formatCents(routePriceCents)}.`,
+    ).toBe(true);
   });
 
-  await test.step('toggle Route ON, verify checkbox returns to checked', async () => {
+  await test.step('toggle Route ON, subtotal restores', async () => {
+    const beforeRestore = (
+      await (await resolve(page, profile, 'cartSubtotal')).innerText()
+    ).trim();
     await setToggle(page, profile, toggle, true);
     expect(await toggle.isChecked(), 'Route toggle did not return to checked').toBe(true);
+    const restoredText = await pollSubtotalChange(page, profile, beforeRestore);
+    const restoredCents = parseMoneyCents(restoredText);
     await attachScreenshot(page, info, '06-widget-on-again');
+    expect(
+      withinTolerance(restoredCents, subtotalWithRouteCents, SUBTOTAL_TOLERANCE_CENTS),
+      `Cart subtotal after re-checking Route is ${formatCents(restoredCents)}, expected ${formatCents(subtotalWithRouteCents)}.`,
+    ).toBe(true);
   });
 }

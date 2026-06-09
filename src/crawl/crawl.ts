@@ -8,7 +8,7 @@ import {
   type CrawledEntry,
   type CrawledFile,
 } from '../merchants/registry.js';
-import { buildLocator } from '../healing/resolver.js';
+import { buildLocator, resolveHint } from '../healing/resolver.js';
 import { sweepPopups } from '../healing/popups.js';
 import { healWithLLM } from '../healing/llm.js';
 import { healWithLabel } from '../healing/labelHeuristics.js';
@@ -73,8 +73,10 @@ async function resolveForCrawl(
   if (!force) {
     const cached = previous?.entries[landmark];
     if (cached) {
-      const loc = buildLocator(page, cached.hint);
-      if (await isUsable(loc)) {
+      // Use async resolveHint instead of sync buildLocator — the cached hint
+      // may be 'labelMatch' which re-runs the per-landmark finder.
+      const loc = await resolveHint(page, cached.hint);
+      if (loc && (await isUsable(loc))) {
         const accept = await meetsAcceptance(loc, landmark);
         if (accept.ok) {
           // Reuse the cached selector — mark source as 'cached' but preserve original discovery time.
@@ -268,11 +270,11 @@ export async function crawlMerchant(
     await sweepPopups(page, profile);
     await assertCartNotEmpty(page);
 
-    // Stage 4: cart page. cartTotal and cartSubtotal are both currently
-    // skipped — the flow validates Route's toggle via input.isChecked()
-    // and a $-amount in the routePrice element. Re-enable cartSubtotal when
-    // we wire the subtotal-delta assertion back in (the labelMatch heuristic
-    // needs a runtime-resolve fix first).
+    // Stage 4: cart page. cartTotal is skipped (most merchants compute tax at
+    // checkout). cartSubtotal IS discovered (we want the crawl-time finder
+    // diagnostic output) but the test flow doesn't assert on it yet — the
+    // runtime labelMatch resolution is under investigation.
+    await resolveForCrawl(page, profile, 'cartSubtotal', previous, force, entries, feedback);
     await resolveForCrawl(page, profile, 'routeToggle', previous, force, entries, feedback);
     await resolveForCrawl(page, profile, 'routePrice', previous, force, entries, feedback);
   } finally {

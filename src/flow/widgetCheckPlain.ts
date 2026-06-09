@@ -3,7 +3,12 @@ import type { Landmark, SiteProfile } from '../merchants/types.js';
 import { resolve } from '../healing/resolver.js';
 import { sweepPopups } from '../healing/popups.js';
 import { gotoProductPage } from '../util/navigation.js';
-import { parseMoneyCents } from '../util/money.js';
+import { formatCents, parseMoneyCents, withinTolerance } from '../util/money.js';
+
+// Scheels' cart subtotal updates 1-2s after the toggle interaction; poll
+// instead of fixed sleep so we don't waste time when the merchant is fast.
+const SUBTOTAL_POLL_TIMEOUT_MS = 5000;
+const SUBTOTAL_TOLERANCE_CENTS = 5; // line-rounding differences per merchant
 
 export type FlowFailure = {
   step: string;
@@ -20,6 +25,26 @@ export type FlowResult = { ok: true } | { ok: false; failure: FlowFailure };
 async function readText(page: Page, profile: SiteProfile, landmark: Landmark): Promise<string> {
   const loc = await resolve(page, profile, landmark);
   return (await loc.innerText()).trim();
+}
+
+// Poll readText for `landmark` until its value differs from `baseline`, or
+// timeout. Returns the most recent reading either way (caller decides if a
+// no-change result is a failure).
+async function pollForChange(
+  page: Page,
+  profile: SiteProfile,
+  landmark: Landmark,
+  baseline: string,
+  timeoutMs: number,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  let last = baseline;
+  while (Date.now() < deadline) {
+    last = await readText(page, profile, landmark).catch(() => last);
+    if (last !== baseline) return last;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  return last;
 }
 
 
@@ -173,7 +198,8 @@ export async function runWidgetCheckPlain(
     };
   }
 
-  // Step 1: ensure ON, verify checkbox state, confirm widget rendered.
+  // Step 1: ensure ON. Verify checkbox state, then read routePrice +
+  // cartSubtotal baseline.
   await toggleCheckbox(toggleLoc, true);
   if ((await toggleLoc.isChecked().catch(() => null)) !== true) {
     return {
@@ -187,14 +213,15 @@ export async function runWidgetCheckPlain(
     };
   }
 
+  let routePriceCents: number;
   try {
     readValues.routePrice = await readText(page, profile, 'routePrice');
-    parseMoneyCents(readValues.routePrice); // throws if no $-amount → widget didn't render
+    routePriceCents = parseMoneyCents(readValues.routePrice);
   } catch (err) {
     return {
       ok: false,
       failure: {
-        step: 'read Route price (widget rendered)',
+        step: 'read Route price',
         message: (err as Error).message,
         suspectLandmarks: ['routePrice'],
         readValues,
@@ -202,7 +229,24 @@ export async function runWidgetCheckPlain(
     };
   }
 
-  // Step 2: toggle OFF, verify checkbox state changed.
+  let subtotalWithRouteCents: number;
+  try {
+    readValues.cartSubtotal = await readText(page, profile, 'cartSubtotal');
+    subtotalWithRouteCents = parseMoneyCents(readValues.cartSubtotal);
+  } catch (err) {
+    return {
+      ok: false,
+      failure: {
+        step: 'read cart subtotal (Route on)',
+        message: (err as Error).message,
+        suspectLandmarks: ['cartSubtotal'],
+        readValues,
+      },
+    };
+  }
+
+  // Step 2: toggle OFF. Verify checkbox state, then poll cartSubtotal for
+  // the delayed update, assert the delta matches routePrice.
   await toggleCheckbox(toggleLoc, false);
   if ((await toggleLoc.isChecked().catch(() => null)) !== false) {
     return {
@@ -216,7 +260,58 @@ export async function runWidgetCheckPlain(
     };
   }
 
-  // Step 3: toggle ON, verify checkbox returns to true.
+  const subtotalOffText = await pollForChange(
+    page,
+    profile,
+    'cartSubtotal',
+    readValues.cartSubtotal ?? '',
+    SUBTOTAL_POLL_TIMEOUT_MS,
+  );
+  readValues.cartSubtotal = subtotalOffText;
+  let subtotalOffCents: number;
+  try {
+    subtotalOffCents = parseMoneyCents(subtotalOffText);
+  } catch (err) {
+    return {
+      ok: false,
+      failure: {
+        step: 'parse cart subtotal after Route off',
+        message: (err as Error).message,
+        suspectLandmarks: ['cartSubtotal'],
+        readValues,
+      },
+    };
+  }
+
+  const delta = subtotalWithRouteCents - subtotalOffCents;
+  if (delta === 0) {
+    return {
+      ok: false,
+      failure: {
+        step: 'cart subtotal change after toggle OFF',
+        message:
+          `Cart subtotal did not change after unchecking Route (${formatCents(subtotalWithRouteCents)} both before and after, after ${SUBTOTAL_POLL_TIMEOUT_MS / 1000}s poll). ` +
+          `Either cartSubtotal selector points at a static element (item subtotal vs. running total) ` +
+          `or the toggle didn't reach Route's widget despite isChecked() reporting unchecked.`,
+        suspectLandmarks: ['cartSubtotal', 'routeToggle'],
+        readValues,
+      },
+    };
+  }
+  if (!withinTolerance(delta, routePriceCents, SUBTOTAL_TOLERANCE_CENTS)) {
+    return {
+      ok: false,
+      failure: {
+        step: 'cart subtotal delta matches Route price',
+        message:
+          `Cart subtotal dropped by ${formatCents(delta)} after unchecking Route, expected drop ${formatCents(routePriceCents)} (the Route line price).`,
+        suspectLandmarks: ['cartSubtotal', 'routePrice'],
+        readValues,
+      },
+    };
+  }
+
+  // Step 3: toggle ON. Verify checkbox state, poll for subtotal restore.
   await toggleCheckbox(toggleLoc, true);
   if ((await toggleLoc.isChecked().catch(() => null)) !== true) {
     return {
@@ -230,17 +325,41 @@ export async function runWidgetCheckPlain(
     };
   }
 
-  // TODO: re-enable cart-subtotal delta assertion once the cartSubtotal
-  // landmark resolves reliably at test time. The labelMatch heuristic
-  // works at crawl time but the runtime re-discovery is returning null —
-  // needs separate investigation (likely a DOM state difference between
-  // crawl and test, or the smallest-element scan criteria filtering out
-  // the actual subtotal container).
-  //
-  // Plan to restore:
-  // 1. Read cartSubtotal baseline (Route on)
-  // 2. Toggle off → poll cartSubtotal for change → assert delta = routePrice
-  // 3. Toggle on → poll for restore → assert matches baseline
+  const subtotalRestoredText = await pollForChange(
+    page,
+    profile,
+    'cartSubtotal',
+    subtotalOffText,
+    SUBTOTAL_POLL_TIMEOUT_MS,
+  );
+  readValues.cartSubtotal = subtotalRestoredText;
+  let subtotalRestoredCents: number;
+  try {
+    subtotalRestoredCents = parseMoneyCents(subtotalRestoredText);
+  } catch (err) {
+    return {
+      ok: false,
+      failure: {
+        step: 'parse cart subtotal after Route restored',
+        message: (err as Error).message,
+        suspectLandmarks: ['cartSubtotal'],
+        readValues,
+      },
+    };
+  }
+
+  if (!withinTolerance(subtotalRestoredCents, subtotalWithRouteCents, SUBTOTAL_TOLERANCE_CENTS)) {
+    return {
+      ok: false,
+      failure: {
+        step: 'cart subtotal restored after toggle ON',
+        message:
+          `Cart subtotal after re-checking Route is ${formatCents(subtotalRestoredCents)}, expected ${formatCents(subtotalWithRouteCents)}.`,
+        suspectLandmarks: ['cartSubtotal'],
+        readValues,
+      },
+    };
+  }
 
   return { ok: true };
 }
