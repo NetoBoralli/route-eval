@@ -109,12 +109,45 @@ async function isUsable(loc: Locator): Promise<boolean> {
 // (Subtotal, Total, Route/Package Protection). Returns the located element.
 const finders: Partial<Record<Landmark, (page: Page) => Promise<Locator | null>>> = {
   cartSubtotal: async (page) => {
-    const label = page.getByText(/^subtotal$/i).first();
-    if (!(await label.isVisible({ timeout: 1500 }).catch(() => false))) return null;
-    // Walk up two levels to find the row, then locate the $-amount sibling.
-    const row = label.locator('xpath=ancestor::*[2]');
-    const price = row.getByText(/\$\s?\d+(\.\d{2})?/).first();
-    return (await price.isVisible({ timeout: 500 }).catch(() => false)) ? price : null;
+    // Find the SMALLEST visible element whose text contains both "Subtotal"
+    // AND a $-amount. Walking up ancestors from a "Subtotal" label captures
+    // sibling rows (Route's $2.49 line often appears BEFORE the Subtotal row
+    // in DOM order, contaminating any first-$-in-ancestor match). Scanning for
+    // smallest text-match scopes naturally to the cart-summary row.
+    //
+    // The found element gets tagged with a temporary marker attribute so we
+    // can build a Locator from it; the synthesizer then derives a stable
+    // selector from the element's REAL attributes (id, data-testid, unique
+    // class, or structural path) — the marker itself isn't included in the
+    // attribute scan list so it's never what gets cached.
+    const handle = await page.evaluateHandle(() => {
+      let best: Element | null = null;
+      let bestSize = Infinity;
+      const all = document.querySelectorAll('body *');
+      for (let i = 0; i < all.length; i++) {
+        const el = all[i];
+        if (!el) continue;
+        const txt = (el.textContent || '').trim();
+        if (txt.length > 200 || txt.length < 5) continue;
+        if (!/subtotal/i.test(txt)) continue;
+        if (!/\$\s*\d/.test(txt)) continue;
+        if (txt.length < bestSize) {
+          bestSize = txt.length;
+          best = el;
+        }
+      }
+      if (best) (best as HTMLElement).setAttribute('data-route-eval-label-match', 'subtotal');
+      return best;
+    });
+    const el = handle.asElement();
+    if (!el) {
+      await handle.dispose();
+      return null;
+    }
+    await handle.dispose();
+    const loc = page.locator('[data-route-eval-label-match="subtotal"]');
+    if (!(await loc.first().isVisible({ timeout: 500 }).catch(() => false))) return null;
+    return loc.first();
   },
   cartTotal: async (page) => {
     // Match "Total" or "Order Total" but NOT "Subtotal".
