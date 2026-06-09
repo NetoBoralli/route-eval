@@ -45,6 +45,48 @@ function safeParseCents(text: string): number | null {
   }
 }
 
+// Toggle a checkbox-shaped input to a target state. Falls through three
+// strategies because Route's widget puts a label *over* the input (standard
+// HTML pattern: clicking the label toggles the input) and Playwright's
+// strict actionability check rejects that as "label intercepts pointer
+// events". Sticky merchant headers create the same false-positive.
+//
+// 1. Normal .check()/.uncheck() — preserves Playwright's state-aware logic.
+// 2. .click({ force: true }) — bypasses interception checks, lets the
+//    label-as-overlay click through to the linked input.
+// 3. Direct DOM mutation + change event dispatch — last resort if even the
+//    forced click can't reach the element.
+async function toggleCheckbox(
+  loc: import('@playwright/test').Locator,
+  target: boolean,
+): Promise<void> {
+  // Try Playwright's smart .check/.uncheck first with a short timeout. If the
+  // page's overlay layout blocks it, we'll bail and try force.
+  try {
+    if (target) await loc.check({ timeout: 3000 });
+    else await loc.uncheck({ timeout: 3000 });
+  } catch {
+    try {
+      // Force-click bypasses actionability checks. HTML still routes the click
+      // through any overlaying <label for="...">.
+      await loc.click({ force: true, timeout: 3000 });
+    } catch {
+      // Last resort: flip the input state directly and dispatch the change
+      // event so any React/JS listener picks it up.
+      await loc.evaluate((node, desired) => {
+        if (!(node instanceof HTMLInputElement)) return;
+        if (node.checked !== desired) {
+          node.checked = desired;
+          node.dispatchEvent(new Event('input', { bubbles: true }));
+          node.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      }, target);
+    }
+  }
+  // Cart totals on most merchants update via XHR; wait briefly for re-render.
+  await loc.page().waitForTimeout(750);
+}
+
 // Plain-function version of the cart/widget validation. Used by both the heal
 // CLI (which needs structured failures to drive its retry loop) and the
 // Playwright Test spec (which wraps each step in test.step).
@@ -113,8 +155,7 @@ export async function runWidgetCheckPlain(
   try {
     await sweepPopups(page, profile);
     const toggle = await resolve(page, profile, 'routeToggle');
-    await toggle.check();
-    await page.waitForTimeout(750);
+    await toggleCheckbox(toggle, true);
   } catch (err) {
     return {
       ok: false,
@@ -146,8 +187,7 @@ export async function runWidgetCheckPlain(
   try {
     await sweepPopups(page, profile);
     const toggle = await resolve(page, profile, 'routeToggle');
-    await toggle.uncheck();
-    await page.waitForTimeout(750);
+    await toggleCheckbox(toggle, false);
   } catch (err) {
     return {
       ok: false,
@@ -182,8 +222,7 @@ export async function runWidgetCheckPlain(
   try {
     await sweepPopups(page, profile);
     const toggle = await resolve(page, profile, 'routeToggle');
-    await toggle.check();
-    await page.waitForTimeout(750);
+    await toggleCheckbox(toggle, true);
     const restored = await readText(page, profile, 'routePrice');
     readValues.routePrice = restored;
     const restoredCents = parseMoneyCents(restored);

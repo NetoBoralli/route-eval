@@ -17,9 +17,26 @@ async function setToggle(page: Page, profile: SiteProfile, on: boolean): Promise
   // cart loads and intercept the toggle click otherwise.
   await sweepPopups(page, profile);
   const toggle = await resolve(page, profile, 'routeToggle');
-  if (on) await toggle.check();
-  else await toggle.uncheck();
-  // Cart totals on most merchants update via XHR; wait briefly for re-render.
+  try {
+    if (on) await toggle.check({ timeout: 3000 });
+    else await toggle.uncheck({ timeout: 3000 });
+  } catch {
+    // Route's widget puts a <label> over the input; Playwright reports it as
+    // "intercepts pointer events" even though clicking the label is the
+    // intended user gesture. Force the click; HTML semantics carry it.
+    try {
+      await toggle.click({ force: true, timeout: 3000 });
+    } catch {
+      await toggle.evaluate((node, desired) => {
+        if (!(node instanceof HTMLInputElement)) return;
+        if (node.checked !== desired) {
+          node.checked = desired;
+          node.dispatchEvent(new Event('input', { bubbles: true }));
+          node.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      }, on);
+    }
+  }
   await page.waitForTimeout(750);
 }
 
