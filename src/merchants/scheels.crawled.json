@@ -1,6 +1,6 @@
 {
   "merchant": "scheels",
-  "crawledAt": "2026-06-09T02:59:43.941Z",
+  "crawledAt": "2026-06-09T03:09:38.115Z",
   "entries": {
     "addToCart": {
       "hint": {
@@ -8,7 +8,7 @@
         "css": "#add-to-cart"
       },
       "source": "cached",
-      "discoveredAt": "2026-06-09T02:57:29.469Z",
+      "discoveredAt": "2026-06-09T03:09:07.664Z",
       "confidence": "high"
     },
     "cartLink": {
@@ -17,34 +17,7 @@
         "css": "#headercart"
       },
       "source": "cached",
-      "discoveredAt": "2026-06-09T02:57:31.226Z",
-      "confidence": "high"
-    },
-    "cartSubtotal": {
-      "hint": {
-        "kind": "css",
-        "css": "div.flex.items-center.justify-between.capitalize.text-secondary-black.text-sm p:first-child + div + div p"
-      },
-      "source": "cached",
-      "discoveredAt": "2026-06-09T02:57:43.515Z",
-      "confidence": "low"
-    },
-    "routePrice": {
-      "hint": {
-        "kind": "css",
-        "css": ".pw-quote[data-testid=\"pw-quote\"]"
-      },
-      "source": "cached",
-      "discoveredAt": "2026-06-09T02:58:07.570Z",
-      "confidence": "high"
-    },
-    "routeToggle": {
-      "hint": {
-        "kind": "css",
-        "css": "input[id=\"ufnuq6395z81m6pkeyvatdmw83pmfjga\"]"
-      },
-      "source": "llm",
-      "discoveredAt": "2026-06-09T02:59:43.894Z",
+      "discoveredAt": "2026-06-09T03:09:09.517Z",
       "confidence": "high"
     }
   }

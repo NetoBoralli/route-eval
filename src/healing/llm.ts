@@ -131,8 +131,10 @@ function userPromptFor(landmark: Landmark, snippet: string, feedback?: string): 
     `STRICT RULES:\n` +
     `- Return exactly ONE selector. No commas, no alternatives, no fallbacks.\n` +
     `- Standard CSS only. No XPath. No Playwright pseudo-classes like :has-text(), :visible, :nth-match().\n` +
+    `- AVOID :nth-of-type(), :first-of-type, :last-of-type, :nth-child(), :first-child, :last-child — DOM order changes silently between page loads and these break.\n` +
+    `- AVOID long compound class chains (.foo.bar.baz.qux). They mirror the DOM's current Tailwind state, not its meaning.\n` +
     `- Every attribute value in the selector MUST appear literally in the HTML below. If the HTML shows id="add-to-cart", use #add-to-cart — do not invent data-testid="addToCart".\n` +
-    `- Prefer in order: #id → [data-testid="..."] → [aria-label="..."] → tag+role-based attribute → class name.\n` +
+    `- Prefer in this order: #id → [data-testid="..."] → [aria-label="..."] → [name="..."] → a single distinctive class name → tag+attribute.\n` +
     `- The selector must match exactly one visible element.${feedbackBlock}\n\n` +
     `HTML:\n${snippet}`
   );
