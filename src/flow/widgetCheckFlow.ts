@@ -17,27 +17,56 @@ async function setToggle(page: Page, profile: SiteProfile, on: boolean): Promise
   // cart loads and intercept the toggle click otherwise.
   await sweepPopups(page, profile);
   const toggle = await resolve(page, profile, 'routeToggle');
+  const escapeForCss = (s: string): string => s.replace(/[^a-zA-Z0-9_-]/g, (c) => `\\${c}`);
+
+  const verify = async (): Promise<boolean> => {
+    await page.waitForTimeout(1500);
+    return (await toggle.isChecked().catch(() => null)) === on;
+  };
+
+  // Strategy 1: click the <label for="..."> — what users actually click and
+  // what Route's widget JS listens on.
+  const id = await toggle.getAttribute('id').catch(() => null);
+  if (id) {
+    const label = page.locator(`label[for="${escapeForCss(id)}"]`);
+    if (await label.isVisible({ timeout: 500 }).catch(() => false)) {
+      try {
+        await label.click({ timeout: 3000 });
+        if (await verify()) return;
+      } catch {
+        // fall through
+      }
+    }
+  }
+
+  // Strategy 2: native check/uncheck on input.
   try {
     if (on) await toggle.check({ timeout: 3000 });
     else await toggle.uncheck({ timeout: 3000 });
+    if (await verify()) return;
   } catch {
-    // Route's widget puts a <label> over the input; Playwright reports it as
-    // "intercepts pointer events" even though clicking the label is the
-    // intended user gesture. Force the click; HTML semantics carry it.
-    try {
-      await toggle.click({ force: true, timeout: 3000 });
-    } catch {
-      await toggle.evaluate((node, desired) => {
-        if (!(node instanceof HTMLInputElement)) return;
-        if (node.checked !== desired) {
-          node.checked = desired;
-          node.dispatchEvent(new Event('input', { bubbles: true }));
-          node.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-      }, on);
-    }
+    // fall through
   }
-  await page.waitForTimeout(750);
+
+  // Strategy 3: force-click input.
+  try {
+    await toggle.click({ force: true, timeout: 3000 });
+    if (await verify()) return;
+  } catch {
+    // fall through
+  }
+
+  // Strategy 4: direct DOM mutation + event dispatch.
+  await toggle.evaluate((node, desired) => {
+    if (!(node instanceof HTMLInputElement)) return;
+    if (node.checked !== desired) {
+      node.checked = desired;
+      node.dispatchEvent(new Event('input', { bubbles: true }));
+      node.dispatchEvent(new Event('change', { bubbles: true }));
+      node.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    }
+  }, on);
+  await page.waitForTimeout(1500);
 }
 
 export async function runWidgetCheck(
