@@ -111,6 +111,7 @@ export async function runWidgetCheckPlain(
   let routePriceCentsOn: number;
   const readValues: Partial<Record<Landmark, string>> = {};
   try {
+    await sweepPopups(page, profile);
     const toggle = await resolve(page, profile, 'routeToggle');
     await toggle.check();
     await page.waitForTimeout(750);
@@ -143,6 +144,7 @@ export async function runWidgetCheckPlain(
   // Step: uncheck Route. The Route price element should either disappear
   // (not visible) or stop showing a $-amount.
   try {
+    await sweepPopups(page, profile);
     const toggle = await resolve(page, profile, 'routeToggle');
     await toggle.uncheck();
     await page.waitForTimeout(750);
@@ -178,6 +180,7 @@ export async function runWidgetCheckPlain(
 
   // Step: re-check Route, price should come back to the original value.
   try {
+    await sweepPopups(page, profile);
     const toggle = await resolve(page, profile, 'routeToggle');
     await toggle.check();
     await page.waitForTimeout(750);

@@ -28,6 +28,15 @@ export async function meetsAcceptance(
             reason: `text ${JSON.stringify(text.slice(0, 60))} contains no $-amount`,
           };
         }
+        // A price element shouldn't be a wrapping container. 200 chars is
+        // generous for "Route Protection · $2.49" etc., but catches body-text
+        // matches like "Skip to main content\nGifts Dad Will Love..."
+        if (text.length > 200) {
+          return {
+            ok: false,
+            reason: `text is ${text.length} chars — selector matches a wrapper, not the price element`,
+          };
+        }
         return { ok: true };
       }
       case 'routeToggle': {

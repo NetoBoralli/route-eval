@@ -54,7 +54,24 @@ async function dismissModalDialogs(page: Page): Promise<boolean> {
       dismissed = true;
       await page.waitForTimeout(250);
     } catch {
-      // best-effort
+      // continue to nuclear option
+    }
+
+    // Nuclear fallback: if the dialog is STILL visible after close-button and
+    // Escape, remove it from the DOM directly. Marketing popups (Klaviyo etc.)
+    // often trap Escape and have no detectable close button — this guarantees
+    // they won't intercept downstream clicks.
+    if (await dlg.isVisible({ timeout: 250 }).catch(() => false)) {
+      try {
+        await dlg.evaluate((node) => {
+          if (node instanceof Element) node.remove();
+        });
+        // eslint-disable-next-line no-console
+        console.log('[popup] removed stuck modal from DOM');
+        dismissed = true;
+      } catch {
+        // best-effort
+      }
     }
   }
   return dismissed;

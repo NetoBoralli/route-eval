@@ -13,6 +13,9 @@ async function attachScreenshot(page: Page, info: TestInfo, label: string): Prom
 }
 
 async function setToggle(page: Page, profile: SiteProfile, on: boolean): Promise<void> {
+  // Sweep popups first — marketing modals (Klaviyo etc.) can appear after the
+  // cart loads and intercept the toggle click otherwise.
+  await sweepPopups(page, profile);
   const toggle = await resolve(page, profile, 'routeToggle');
   if (on) await toggle.check();
   else await toggle.uncheck();
